@@ -36,7 +36,8 @@ def test_streams_thinking_and_answer(ollama, client, memory):
     assert body["messages"][0]["content"].startswith(ULTRON_SYSTEM_PROMPT)
     assert body["messages"][1:] == [{"role": "user", "content": "Kdo si?"}]
     assert {t["function"]["name"] for t in body["tools"]} == {
-        "calculate", "web_search", "open_url", "wikipedia", "remember"
+        "calculate", "web_search", "open_url", "wikipedia", "remember",
+        "system_info", "hash_text", "generate_password", "tor_check",
     }
     assert brain.messages == [
         {"role": "user", "content": "Kdo si?"},

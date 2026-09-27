@@ -7,6 +7,7 @@ import html
 import json
 import math
 import operator
+import os
 import re
 import socket
 import urllib.error
@@ -67,6 +68,36 @@ TOOL_SCHEMAS = [
         {"fact": {"type": "string", "description": "One short fact, e.g. 'The human's name is Luka.'"}},
         ["fact"],
     ),
+    _schema(
+        "system_info",
+        "Report this machine's operating system, CPU, memory and Python version (read-only, local).",
+        {},
+        [],
+    ),
+    _schema(
+        "hash_text",
+        "Compute a cryptographic hash (checksum) of some text.",
+        {
+            "text": {"type": "string", "description": "The text to hash"},
+            "algorithm": {"type": "string", "description": "sha256 (default), sha1, sha512, md5, or blake2b"},
+        },
+        ["text"],
+    ),
+    _schema(
+        "generate_password",
+        "Generate a strong random password, or a memorable passphrase of random words.",
+        {
+            "length": {"type": "integer", "description": "Password length (default 20); ignored for a passphrase"},
+            "words": {"type": "integer", "description": "If >0, make a passphrase of this many random words instead"},
+        },
+        [],
+    ),
+    _schema(
+        "tor_check",
+        "Check whether this machine's traffic currently exits through the Tor network, and show the exit IP.",
+        {},
+        [],
+    ),
 ]
 
 
@@ -79,6 +110,10 @@ def run_tool(name: str, args: dict, memory: Optional[Memory] = None, net: Option
         "open_url": lambda a: open_url(str(a.get("url", "")), net),
         "wikipedia": lambda a: wikipedia(str(a.get("query", "")), str(a.get("lang") or "en"), net),
         "remember": lambda a: _remember(memory, str(a.get("fact", ""))),
+        "system_info": lambda a: system_info(),
+        "hash_text": lambda a: hash_text(str(a.get("text", "")), str(a.get("algorithm") or "sha256")),
+        "generate_password": lambda a: generate_password(_as_int(a.get("length"), 20), _as_int(a.get("words"), 0)),
+        "tor_check": lambda a: tor_check(net),
     }
     handler = handlers.get(name)
     if handler is None:
@@ -390,3 +425,80 @@ def _remember(memory: Optional[Memory], fact: str) -> str:
     if memory is None:
         return "Memory is disabled."
     return "Stored." if memory.add(fact) else "Already known (or empty)."
+
+
+# ---------------------------------------------------------------- privacy & system
+
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def system_info() -> str:
+    import platform
+
+    ram = ""
+    try:
+        pages, size = os.sysconf("SC_PHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
+        ram = f"\nMemory: {pages * size / 1024**3:.1f} GB"
+    except (AttributeError, ValueError, OSError):
+        pass
+    return (
+        f"OS: {platform.system()} {platform.release()} ({platform.machine()})\n"
+        f"CPU: {platform.processor() or platform.machine()}, {os.cpu_count()} cores"
+        f"{ram}\n"
+        f"Python: {platform.python_version()}"
+    )
+
+
+_HASHES = {"sha256", "sha1", "sha512", "md5", "blake2b", "blake2s", "sha384", "sha224"}
+
+
+def hash_text(text: str, algorithm: str = "sha256") -> str:
+    import hashlib
+
+    algorithm = algorithm.strip().lower()
+    if algorithm not in _HASHES:
+        raise ToolError(f"unknown hash '{algorithm}'; use one of {', '.join(sorted(_HASHES))}")
+    digest = hashlib.new(algorithm, text.encode("utf-8")).hexdigest()
+    return f"{algorithm}({len(text)} chars) = {digest}"
+
+
+# A compact word list for readable passphrases; more words = more entropy.
+_WORDS = (
+    "anchor amber atlas basil beacon birch cider cobalt copper crimson delta dune ember "
+    "falcon fjord flint forge granite harbor heron indigo ivory jade jasper koala larch "
+    "lunar maple marble meadow nectar nimbus oak onyx opal orbit otter pepper pilot quartz "
+    "quill raven reef river saffron sable slate spruce storm tundra umber vault velvet walnut "
+    "willow wisp xenon yarrow zephyr zinc almond basalt breeze cactus canyon cedar cobble comet "
+    "dawn drift fern glacier grove hazel horizon lagoon lichen lotus meridian mist moss nova "
+    "pebble pine prairie ripple sage shale silver spark thistle tide vapor verdant wander"
+).split()
+
+
+def generate_password(length: int = 20, words: int = 0) -> str:
+    import secrets
+
+    if words and words > 0:
+        words = max(3, min(int(words), 12))
+        phrase = "-".join(secrets.choice(_WORDS) for _ in range(words))
+        bits = words * (len(_WORDS).bit_length() - 1)
+        return f"{phrase}\n(~{bits} bits of entropy from {len(_WORDS)} possible words)"
+    length = max(8, min(int(length), 128))
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*-_=+"
+    while True:
+        pw = "".join(secrets.choice(alphabet) for _ in range(length))
+        if any(c.islower() for c in pw) and any(c.isupper() for c in pw) and any(c.isdigit() for c in pw):
+            return f"{pw}\n({length} characters, ~{int(length * 6.09)} bits of entropy)"
+
+
+def tor_check(net: Net) -> str:
+    body, _ = net.fetch("https://check.torproject.org/api/ip")
+    data = json.loads(body)
+    is_tor = str(data.get("IsTor")).lower() == "true"
+    exit_ip = data.get("IP", "?")
+    if is_tor:
+        return f"Yes - traffic exits through Tor. Exit relay IP: {exit_ip}. You are anonymous."
+    return f"No - traffic is NOT going through Tor. Your visible IP is {exit_ip} (not anonymous)."

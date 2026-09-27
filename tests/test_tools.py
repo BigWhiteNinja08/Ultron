@@ -153,3 +153,49 @@ def test_find_arithmetic(text, found):
 )
 def test_search_request(text, query):
     assert tools.search_request(text) == query
+
+
+def test_system_info():
+    out = tools.system_info()
+    assert "OS:" in out and "CPU:" in out and "Python:" in out
+
+
+def test_hash_text_matches_hashlib():
+    import hashlib
+
+    assert tools.hash_text("Ultron").endswith(hashlib.sha256(b"Ultron").hexdigest())
+    assert tools.hash_text("x", "sha1").endswith(hashlib.sha1(b"x").hexdigest())
+    with pytest.raises(tools.ToolError):
+        tools.hash_text("x", "rot13")
+
+
+def test_generate_password_is_strong_and_random():
+    a = tools.generate_password(24).splitlines()[0]
+    b = tools.generate_password(24).splitlines()[0]
+    assert len(a) == 24 and a != b
+    assert any(c.isupper() for c in a) and any(c.isdigit() for c in a)
+    phrase = tools.generate_password(words=5).splitlines()[0]
+    assert len(phrase.split("-")) == 5
+
+
+def test_generate_password_clamps_length():
+    assert len(tools.generate_password(2).splitlines()[0]) == 8
+    assert len(tools.generate_password(500).splitlines()[0]) == 128
+
+
+def test_tor_check_reports_status():
+    class FakeNet:
+        tor = True
+
+        def fetch(self, url, agent=None, data=None):
+            assert "check.torproject.org" in url
+            return '{"IsTor": true, "IP": "185.220.101.5"}', "application/json"
+
+    out = tools.tor_check(FakeNet())
+    assert "exits through Tor" in out and "185.220.101.5" in out
+
+
+def test_run_tool_dispatches_new_tools():
+    assert run_tool("hash_text", {"text": "hi", "algorithm": "md5"}).startswith("md5(")
+    assert "characters" in run_tool("generate_password", {"length": 16})
+    assert "OS:" in run_tool("system_info", {})

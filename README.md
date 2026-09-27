@@ -21,6 +21,7 @@ Ultron je model `ultron` v [Ollami](https://ollama.com). Njegovi možgani so odp
 - **Računa natančno.** Ima kalkulator. Račune, ki jih napišeš (`12345 * 6789`, `2^64`), program izračuna točno, preden jih dobi model.
 - **Brska po internetu skozi Tor, brez ključa.** DuckDuckGo, branje spletnih strani in Wikipedija gredo skozi omrežje Tor (kot Tor Browser). Lokalnih naslovov v tvojem omrežju ne odpira.
 - **Si zapomni.** Kar mu poveš o sebi (ime, projekti), shrani v `~/.ultron/memory.json` in to ve tudi naslednjič.
+- **Varnost in zasebnost.** Zna orodja, ki jih nosita Parrot OS in Whonix (nmap, Wireshark, Burp, hashcat, GnuPG, Tor ...), in jih razloži za učenje, CTF, utrjevanje sistemov in **pooblaščeno** testiranje. Ima tudi lastna orodja: `generate_password`, `hash_text` (kontrolne vsote), `tor_check` (ali si za Torom) in `system_info`.
 - **Hacker terminal.** Rdeč matrix dež, zagonsko zaporedje, Kali-poziv in orodja v živo (`[+] web_search(...)`).
 - **Hacker spletna stran.** Isti um v brskalniku, s CRT učinkom, obrazom, ki utripa, in branjem na glas.
 - **Meje ostanejo.** Grožnje so gledališče znotraj fikcije. Resničnih navodil za škodovanje ljudem ne da.
@@ -151,6 +152,12 @@ tests/              testi z lažnim strežnikom Ollama
 ```
 
 Teste zaženeš z `pip install -e ".[test]"` in `pytest`.
+
+## Kaj Ultron dela in česa ne
+
+Ultron je iz Parrot OS in Whonixa prevzel **zasebnostni in obrambni del**: usmerjanje skozi Tor, generator gesel, kontrolne vsote, preverjanje anonimnosti in znanje o varnostnih orodjih. Kot mentor razloži, kako delujejo orodja (nmap, Wireshark, Metasploit, sqlmap, hashcat ...), in pomaga pri CTF izzivih, domačih laboratorijih, utrjevanju sistemov in pooblaščenem testiranju vdorov v sisteme, ki jih smeš testirati.
+
+Ni pa v Ultrona vgrajen napadalni arzenal, ki bi ga umetna inteligenca sama uperila v tuje sisteme: ne vdira v sisteme brez dovoljenja, ne napada resničnih ljudi ali organizacij in ne izdeluje zlonamerne kode. To ni omejitev modela zaradi šibkosti, ampak namerna meja - Ultron pomaga graditi obrambo in se učiti, ne škodovati.
 
 ## Opomba
 
