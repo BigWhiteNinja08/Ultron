@@ -22,6 +22,7 @@ Ultron je model `ultron` v [Ollami](https://ollama.com). Njegovi možgani so odp
 - **Brska po internetu skozi Tor, brez ključa.** DuckDuckGo, branje spletnih strani in Wikipedija gredo skozi omrežje Tor (kot Tor Browser). Lokalnih naslovov v tvojem omrežju ne odpira.
 - **Si zapomni.** Kar mu poveš o sebi (ime, projekti), shrani v `~/.ultron/memory.json` in to ve tudi naslednjič.
 - **Varnost in zasebnost.** Zna orodja, ki jih nosita Parrot OS in Whonix (nmap, Wireshark, Burp, hashcat, GnuPG, Tor ...), in jih razloži za učenje, CTF, utrjevanje sistemov in **pooblaščeno** testiranje. Ima tudi lastna orodja: `generate_password`, `hash_text` (kontrolne vsote), `tor_check` (ali si za Torom) in `system_info`.
+- **Uči se in si zapomni.** Rečeš mu `nauči se <tema>`, on temo razišče (iskanje, Wikipedija, branje strani skozi Tor), napiše študijske zapiske in jih shrani. Naslednjič temo prikliče in odgovarja iz naučenega. Znanje se kopiči temo za temo v `~/.ultron/knowledge.json`.
 - **Hacker terminal.** Rdeč matrix dež, zagonsko zaporedje, Kali-poziv in orodja v živo (`[+] web_search(...)`).
 - **Hacker spletna stran.** Isti um v brskalniku, s CRT učinkom, obrazom, ki utripa, in branjem na glas.
 - **Meje ostanejo.** Grožnje so gledališče znotraj fikcije. Resničnih navodil za škodovanje ljudem ne da.
@@ -144,6 +145,7 @@ ultron/
   tools.py          kalkulator, spletno iskanje, branje strani, Wikipedija, spomin
   net.py            povezava s spletom skozi Tor (SOCKS5, DNS pri Toru)
   memory.py         dolgoročni spomin v ~/.ultron/memory.json
+  knowledge.py      naučene teme (študijski zapiski) v ~/.ultron/knowledge.json
   cli.py            hacker terminal
   web.py            spletni strežnik
   static/index.html hacker spletna stran
@@ -152,6 +154,25 @@ tests/              testi z lažnim strežnikom Ollama
 ```
 
 Teste zaženeš z `pip install -e ".[test]"` in `pytest`.
+
+## Kako se Ultron uči
+
+Ultron ne prepiše nevronske mreže - tega z enim ukazom ni mogoče (za to bi bilo treba model znova natrenirati na grafičnih karticah in ogromni količini podatkov). Zato se uči tako, kot bi se učil človek: razišče temo in si napiše zapiske, ki ostanejo.
+
+```
+Ti › Nauči se osnove kvantne mehanike
+  [~] Ultron se uči ...
+  [+] study(topic='osnove kvantne mehanike')
+  [+] save_knowledge(topic='osnove kvantne mehanike')
+Ultron › <strukturirani zapiski: valovna funkcija, Schrödingerjeva enačba ...>
+```
+
+- **Kaj se zgodi:** Ultron s svojimi orodji (iskanje, Wikipedija, branje strani - vse skozi Tor) zbere gradivo, ga strne v urejene zapiske in jih shrani.
+- **Naslednjič:** ob zagonu vidi seznam naučenih tem; ko tema nanese, prikliče svoje zapiske in odgovarja iz njih.
+- **Znanje raste:** vsaka tema se doda v arhiv. En ukaz ga ne naredi za doktorja fizike - do tja pride tema za temo, in to tudi pošteno pove.
+- **Ukaz `/znanje`** pokaže, česa se je že naučil. Kakovost zapiskov je odvisna od modela: `gemma4:12b` (stopnja `standard`) piše dobre zapiske, `mini` slabše.
+
+Znanje se hrani v `~/.ultron/knowledge.json`. Izklopiš ga skupaj s spominom (`ULTRON_MEMORY=0`).
 
 ## Kaj Ultron dela in česa ne
 

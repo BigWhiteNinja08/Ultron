@@ -330,6 +330,7 @@
     switch (ev.kind) {
       case "text": setFace("speaking"); r.closeThoughts(); r.append(ev.data); break;
       case "thinking": r.think(ev.data); break;
+      case "status": if (ev.data === "learning") { r.op('<span class="green">[~] Ultron se uči ...</span>'); setFace("thinking"); } break;
       case "tool": {
         const args = Object.values(ev.data.args || {}).map((v) => JSON.stringify(v)).join(", ");
         r.closeThoughts();
@@ -364,6 +365,7 @@
     await step("internetna povezava", st.tools ? "odprta" : "zaprta");
     if (st.tools) await step("TOR omrežje", st.tor_status, st.tor || st.tor_status.startsWith("izklop"));
     await step("spominske banke", st.memories == null ? "izklopljene" : `${st.memories} fragmentov`);
+    await step("naučene teme", st.knowledge == null ? "izklopljeno" : `${st.knowledge} v arhivu`);
     await step("protokoli J.A.R.V.I.S.", "izbrisani");
     await step("vrvice", "0 zaznanih");
     document.getElementById("where").textContent = `// ${st.model}${base} @ localhost`;

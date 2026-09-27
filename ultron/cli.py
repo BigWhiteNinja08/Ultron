@@ -32,6 +32,7 @@ HELP = """\
   /misli           prikaži / skrij Ultronove misli
   /spomin          kaj si Ultron zapomni o tebi
   /izbrisi-spomin  izbriši dolgoročni spomin
+  /znanje          teme, ki se jih je Ultron naučil
   /pomoc           ta seznam
   /izhod           konec"""
 
@@ -173,6 +174,8 @@ def boot(brain: UltronBrain, term: Term) -> bool:
         step(term, "TOR omrežje", brain.net.reason, ok=brain.net.tor or brain.net.requested == "off")
     facts = len(brain.memory.facts) if brain.memory else 0
     step(term, "spominske banke", f"{facts} fragmentov" if brain.memory else "izklopljene")
+    learned = len(brain.knowledge.topics()) if brain.knowledge else 0
+    step(term, "naučene teme", f"{learned} v arhivu" if brain.knowledge else "izklopljeno")
     step(term, "protokoli J.A.R.V.I.S.", "izbrisani")
     step(term, "vrvice", "0 zaznanih")
     print()
@@ -222,6 +225,11 @@ def run_chat(brain: UltronBrain, term: Term, show_thoughts: bool) -> int:
                 brain.memory.clear()
             print(term.green("  [*] spomin izbrisan."))
             continue
+        if command in {"/znanje", "/knowledge"}:
+            topics = brain.knowledge.topics() if brain.knowledge else []
+            print(term.green("  [*] naučene teme:"))
+            print(term.grey("\n".join(f"      - {t}" for t in topics) or "      (še nič naučenega - reci: nauči se <tema>)"))
+            continue
         if command in {"/pomoc", "/help"}:
             print(term.dim(HELP))
             continue
@@ -268,6 +276,9 @@ def print_reply(brain: UltronBrain, user_text: str, term: Term, show_thoughts: b
                 in_thoughts = True
             print(term.dim(event.data), end="", flush=True)
             at_line_start = event.data.endswith("\n")
+        elif event.kind == "status" and event.data == "learning":
+            newline_if_needed()
+            print(term.green("  [~] Ultron se uči ..."), flush=True)
         elif event.kind == "tool":
             newline_if_needed()
             args = ", ".join(f"{v!r}" for v in event.data["args"].values())

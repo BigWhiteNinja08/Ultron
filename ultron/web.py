@@ -57,6 +57,7 @@ class SessionStore:
                 tools=self.config.tools and "tools" in info.capabilities,
                 tor=brain.net.tor,
                 tor_status=brain.net.reason,
+                knowledge=len(brain.knowledge.topics()) if brain.knowledge else None,
                 memories=len(self.memory.facts) if self.memory else None,
             )
         except OllamaUnavailable:

@@ -199,3 +199,20 @@ def test_run_tool_dispatches_new_tools():
     assert run_tool("hash_text", {"text": "hi", "algorithm": "md5"}).startswith("md5(")
     assert "characters" in run_tool("generate_password", {"length": 16})
     assert "OS:" in run_tool("system_info", {})
+
+
+@pytest.mark.parametrize(
+    "text,topic",
+    [
+        ("Pojdi se naučit fiziko za doktorat", "fiziko za doktorat"),
+        ("nauči se kvantno mehaniko", "kvantno mehaniko"),
+        ("preuči teorijo relativnosti", "teorijo relativnosti"),
+        ("learn about black holes", "black holes"),
+        ("study organic chemistry", "organic chemistry"),
+        ("nauči se", None),
+        ("kaj je fizika", None),
+        ("naučil sem se veliko", None),
+    ],
+)
+def test_learn_request(text, topic):
+    assert tools.learn_request(text) == topic

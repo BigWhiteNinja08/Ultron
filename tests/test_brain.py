@@ -38,6 +38,7 @@ def test_streams_thinking_and_answer(ollama, client, memory):
     assert {t["function"]["name"] for t in body["tools"]} == {
         "calculate", "web_search", "open_url", "wikipedia", "remember",
         "system_info", "hash_text", "generate_password", "tor_check",
+        "save_knowledge", "recall_knowledge", "list_knowledge",
     }
     assert brain.messages == [
         {"role": "user", "content": "Kdo si?"},
@@ -239,3 +240,46 @@ def test_asks_to_remember(text, expected):
     from ultron.brain import _asks_to_remember
 
     assert _asks_to_remember(text) is expected
+
+
+def make_brain_k(client, memory, knowledge, **config):
+    config.setdefault("tor", "off")
+    return UltronBrain(UltronConfig(**config), client=client, memory=memory, knowledge=knowledge)
+
+
+def test_learn_flow_researches_and_saves(ollama, client, memory, knowledge, monkeypatch):
+    calls = {}
+    monkeypatch.setattr("ultron.tools.web_search", lambda q, net=None: (calls.setdefault("search", q), "Bohr model; https://en.wikipedia.org/wiki/Atom")[1])
+    monkeypatch.setattr("ultron.tools.wikipedia", lambda q, lang="en", net=None: (calls.setdefault("wiki", (q, lang)), "An atom is the basic unit of matter.")[1])
+    ollama.queue_chat(chunk("Atom: jedro in elektroni. Ključne formule ..."), chunk(done=True))
+    brain = make_brain_k(client, memory, knowledge)
+
+    events = collect(brain, "Nauči se o atomih")
+
+    assert ("status", "learning") in events
+    assert ("tool", {"name": "study", "args": {"topic": "atomih"}}) in events
+    assert ("tool", {"name": "save_knowledge", "args": {"topic": "atomih"}}) in events
+    assert "Atom: jedro" in "".join(d for k, d in events if k == "text")
+    # the model was asked to study, with the gathered material in the prompt
+    sent = ollama.chat_requests()[0]["messages"][-1]["content"]
+    assert "Study material" in sent and "Bohr model" in sent
+    assert calls["wiki"] == ("atomih", "sl")
+    # notes are saved and the heavy material is not left in history
+    assert "Atom: jedro" in knowledge.get("atomih")["notes"]
+    assert brain.messages[-2] == {"role": "user", "content": "Nauči se o atomih"}
+
+
+def test_studied_topics_go_into_system_prompt(ollama, client, memory, knowledge):
+    knowledge.learn("Kvantna fizika", "Valovna funkcija.")
+    ollama.queue_chat(chunk("Da."), chunk(done=True))
+    brain = make_brain_k(client, memory, knowledge)
+    collect(brain, "Zdravo")
+    system = ollama.chat_requests()[0]["messages"][0]["content"]
+    assert "What you have studied" in system and "Kvantna fizika" in system
+
+
+def test_plain_message_is_not_a_learn_request(ollama, client, memory, knowledge):
+    ollama.queue_chat(chunk("Pozdravljen."), chunk(done=True))
+    brain = make_brain_k(client, memory, knowledge)
+    events = collect(brain, "Kaj je fizika?")
+    assert ("status", "learning") not in events

@@ -8,11 +8,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
+from .knowledge import Knowledge, extract_urls
 from .memory import Memory
 from .net import Net
 from .ollama import Ollama
 from .persona import build_system_prompt
-from .tools import TOOL_SCHEMAS, find_arithmetic, run_tool, search_request
+from .tools import TOOL_SCHEMAS, find_arithmetic, learn_request, run_tool, search_request
 
 DEFAULT_MODEL = "ultron"
 DEFAULT_NUM_CTX = 16384
@@ -84,10 +85,12 @@ class UltronBrain:
         client: Optional[Ollama] = None,
         memory: Optional[Memory] = None,
         net: Optional[Net] = None,
+        knowledge: Optional[Knowledge] = None,
     ):
         self.config = config or UltronConfig.from_env()
         self.client = client or Ollama(self.config.host)
         self.memory = memory if memory is not None else (Memory() if self.config.memory else None)
+        self.knowledge = knowledge if knowledge is not None else (Knowledge() if self.config.memory else None)
         self.net = net or Net(self.config.tor, self.config.tor_proxy)
         self.messages: list[dict] = []
         self._info: Optional[ModelInfo] = None
@@ -95,7 +98,16 @@ class UltronBrain:
 
     def _fresh_system_prompt(self) -> str:
         # Frozen for the whole conversation so Ollama can reuse the cached prompt.
-        return build_system_prompt(self.memory.facts if self.memory else [])
+        return build_system_prompt(
+            self.memory.facts if self.memory else [],
+            self.knowledge.topics() if self.knowledge else None,
+        )
+
+    def _tools_and_think(self):
+        capabilities = self.info().capabilities
+        tools = TOOL_SCHEMAS if self.config.tools and "tools" in capabilities else None
+        think = self.config.think if "thinking" in capabilities else None
+        return tools, think
 
     def forget(self) -> None:
         self.messages.clear()
@@ -121,9 +133,14 @@ class UltronBrain:
         History is only kept if the turn completes; on an error (or if the listener stops
         early) it is rolled back so the next message starts from a clean state.
         """
-        capabilities = self.info().capabilities
-        tools = TOOL_SCHEMAS if self.config.tools and "tools" in capabilities else None
-        think = self.config.think if "thinking" in capabilities else None
+        tools, think = self._tools_and_think()
+
+        # "Go learn X" runs a research-and-save study session instead of a plain reply.
+        if tools and self.knowledge is not None:
+            topic = learn_request(user_text)
+            if topic:
+                yield from self._learn(user_text, topic, tools, think)
+                return
 
         start = len(self.messages)
         # Small local models slip on long arithmetic and sometimes skip a search they were
@@ -160,7 +177,7 @@ class UltronBrain:
                     name, args = _parse_call(call)
                     used_tools.add(name)
                     yield Event("tool", {"name": name, "args": args})
-                    result = run_tool(name, args, self.memory, self.net)
+                    result = run_tool(name, args, self.memory, self.net, self.knowledge)
                     yield Event("tool_result", {"name": name, "result": result})
                     self.messages.append({"role": "tool", "tool_name": name, "content": result})
             else:
@@ -176,6 +193,54 @@ class UltronBrain:
             yield Event("tool", {"name": "remember", "args": {"fact": fact}})
             yield Event("tool_result", {"name": "remember", "result": run_tool("remember", {"fact": fact}, self.memory)})
         yield Event("done")
+
+    def _learn(self, user_text: str, topic: str, tools, think) -> Iterator[Event]:
+        """Research a topic, write study notes, stream them, and save them to knowledge.
+
+        The gathered material is only kept in history for the one generating turn, so it
+        does not bloat the context of later turns; the distilled notes live in the
+        knowledge base instead.
+        """
+        start = len(self.messages)
+        yield Event("status", "learning")
+        yield Event("tool", {"name": "study", "args": {"topic": topic}})
+        material = self._gather(topic, "sl" if _looks_slovenian(user_text) else "en")
+        sources = extract_urls(material)
+        yield Event("tool_result", {"name": "study", "result": f"Zbrano gradivo o: {topic}"})
+
+        study_prompt = (
+            f'{user_text}\n\n[Study material you gathered about "{topic}":\n{material[:6000]}\n\n'
+            "Write thorough, well-structured study notes on this topic in the language of the "
+            "message above: key concepts, definitions, formulas and worked examples. These are "
+            "your own notes, which you will remember. If the material is thin, add what you "
+            "already know and say plainly where your knowledge is limited.]"
+        )
+        self.messages.append({"role": "user", "content": study_prompt})
+        finished = False
+        try:
+            notes, _ = yield from self._stream_once(tools, think)
+            # Keep the plain request in history; the heavy material stays only for this turn.
+            self.messages[-1] = {"role": "user", "content": user_text}
+            self.messages.append({"role": "assistant", "content": notes})
+            if notes.strip():
+                self.knowledge.learn(topic, notes, sources)
+                self._system = self._fresh_system_prompt()
+                yield Event("tool", {"name": "save_knowledge", "args": {"topic": topic}})
+                yield Event("tool_result", {"name": "save_knowledge", "result": f"Naučeno in shranjeno: {topic}."})
+            finished = True
+        finally:
+            if not finished:
+                del self.messages[start:]
+        yield Event("done")
+
+    def _gather(self, topic: str, lang: str = "en") -> str:
+        material = [
+            run_tool("web_search", {"query": topic}, net=self.net),
+            run_tool("wikipedia", {"query": topic, "lang": lang}, net=self.net),
+        ]
+        return "\n\n".join(part for part in material if part and not part.startswith("Error:")) or (
+            "(no external material found - rely on what you already know)"
+        )
 
     def _stream_once(self, tools, think):
         messages = [{"role": "system", "content": self._system}, *self.messages]
@@ -196,6 +261,10 @@ class UltronBrain:
                 yield Event("text", message["content"])
             tool_calls.extend(message.get("tool_calls") or [])
         return "".join(content), tool_calls
+
+
+def _looks_slovenian(text: str) -> bool:
+    return bool(re.search(r"[čšž]", text.lower()))
 
 
 _REMEMBER_REQUEST = re.compile(

@@ -21,3 +21,10 @@ def client(ollama):
 @pytest.fixture
 def memory(tmp_path):
     return Memory(tmp_path / "memory.json")
+
+
+@pytest.fixture
+def knowledge(tmp_path):
+    from ultron.knowledge import Knowledge
+
+    return Knowledge(tmp_path / "knowledge.json")

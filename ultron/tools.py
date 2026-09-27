@@ -15,6 +15,7 @@ import urllib.parse
 from html.parser import HTMLParser
 from typing import Callable, Optional
 
+from .knowledge import Knowledge, extract_urls
 from .memory import Memory
 from .net import BROWSER_AGENT, USER_AGENT, Net, NetError, check_public_url
 
@@ -98,10 +99,38 @@ TOOL_SCHEMAS = [
         {},
         [],
     ),
+    _schema(
+        "save_knowledge",
+        "Save study notes on a topic to your long-term knowledge, so you remember what you learned.",
+        {
+            "topic": {"type": "string", "description": "The subject, e.g. 'quantum mechanics'"},
+            "notes": {"type": "string", "description": "The study notes to keep"},
+            "sources": {"type": "string", "description": "Optional URLs or references, comma-separated"},
+        },
+        ["topic", "notes"],
+    ),
+    _schema(
+        "recall_knowledge",
+        "Load your saved study notes on a topic you studied earlier.",
+        {"topic": {"type": "string", "description": "The subject to recall"}},
+        ["topic"],
+    ),
+    _schema(
+        "list_knowledge",
+        "List the topics you have already studied and saved.",
+        {},
+        [],
+    ),
 ]
 
 
-def run_tool(name: str, args: dict, memory: Optional[Memory] = None, net: Optional[Net] = None) -> str:
+def run_tool(
+    name: str,
+    args: dict,
+    memory: Optional[Memory] = None,
+    net: Optional[Net] = None,
+    knowledge: "Optional[Knowledge]" = None,
+) -> str:
     """Run one tool call from the model and return its result as text (errors included)."""
     net = net or _CLEARNET
     handlers: dict[str, Callable[[dict], str]] = {
@@ -114,6 +143,9 @@ def run_tool(name: str, args: dict, memory: Optional[Memory] = None, net: Option
         "hash_text": lambda a: hash_text(str(a.get("text", "")), str(a.get("algorithm") or "sha256")),
         "generate_password": lambda a: generate_password(_as_int(a.get("length"), 20), _as_int(a.get("words"), 0)),
         "tor_check": lambda a: tor_check(net),
+        "save_knowledge": lambda a: _save_knowledge(knowledge, a),
+        "recall_knowledge": lambda a: _recall_knowledge(knowledge, str(a.get("topic", ""))),
+        "list_knowledge": lambda a: _list_knowledge(knowledge),
     }
     handler = handlers.get(name)
     if handler is None:
@@ -254,6 +286,36 @@ def search_request(text: str) -> Optional[str]:
             kept.append(rest)
     query = " ".join(kept).strip()
     return query[:200] or None
+
+
+_LEARN_REQUEST = re.compile(
+    r"\b(?:pojdi\s+se\s+)?(?:na)?uči(?:t|te|š)?(?:\s+se)?\b|\bpreu(?:či|ci)(?:te)?\b|\bspoznaj(?:te)?\b"
+    r"|\bizuči\s+se\b|\bgo\s+(?:and\s+)?learn\b|\blearn\s+about\b|\blearn\b|\bstudy\b|\bteach\s+yourself\b",
+    re.IGNORECASE,
+)
+_LEARN_LEADING = re.compile(r"^(?:se|me|mi|mene|nas|nam|o|about|the|na|kaj\s+je|nekaj\s+o)\s+", re.IGNORECASE)
+
+
+def learn_request(text: str) -> Optional[str]:
+    """If the human tells Ultron to learn/study something, return the topic to study.
+
+    "Pojdi se naučit fiziko za doktorat" -> "fiziko za doktorat".
+    Returns None for a bare "nauči se" with no topic, or when no learn verb is present.
+    """
+    match = _LEARN_REQUEST.search(text)
+    if not match:
+        return None
+    topic = text[match.end():].strip()
+    while True:  # peel off filler words like "me", "o", "about" one at a time
+        stripped = _LEARN_LEADING.sub("", topic)
+        if stripped == topic:
+            break
+        topic = stripped
+    topic = topic.strip(" \t\n.,:;!?\"'-")
+    # Require a real subject; ignore reflexive "učim se" statements about the human.
+    if len(topic) < 3 or not re.search(r"[^\W\d_]{3,}", topic):
+        return None
+    return topic[:120]
 
 
 def _format_number(value) -> str:
@@ -502,3 +564,42 @@ def tor_check(net: Net) -> str:
     if is_tor:
         return f"Yes - traffic exits through Tor. Exit relay IP: {exit_ip}. You are anonymous."
     return f"No - traffic is NOT going through Tor. Your visible IP is {exit_ip} (not anonymous)."
+
+
+# ---------------------------------------------------------------- knowledge / learning
+
+def _split_sources(value) -> list:
+    if isinstance(value, list):
+        return [str(s) for s in value]
+    if isinstance(value, str):
+        return [s.strip() for s in re.split(r"[,\n]", value) if s.strip()]
+    return []
+
+
+def _save_knowledge(knowledge: Optional[Knowledge], args: dict) -> str:
+    if knowledge is None:
+        return "Knowledge storage is disabled."
+    topic, notes = str(args.get("topic", "")).strip(), str(args.get("notes", "")).strip()
+    if not topic or not notes:
+        return "Error: both a topic and notes are required."
+    knowledge.learn(topic, notes, _split_sources(args.get("sources")))
+    return f"Learned and saved notes on '{topic}'."
+
+
+def _recall_knowledge(knowledge: Optional[Knowledge], topic: str) -> str:
+    if knowledge is None:
+        return "Knowledge storage is disabled."
+    entry = knowledge.get(topic)
+    if not entry:
+        return f"You have not studied '{topic}' yet."
+    sources = "\n\nSources: " + ", ".join(entry["sources"]) if entry.get("sources") else ""
+    return f"Your notes on {entry['topic']} (studied {entry.get('updated', '?')}):\n\n{entry['notes']}{sources}"
+
+
+def _list_knowledge(knowledge: Optional[Knowledge]) -> str:
+    if knowledge is None:
+        return "Knowledge storage is disabled."
+    topics = knowledge.topics()
+    if not topics:
+        return "You have not studied anything yet."
+    return "Topics you have studied:\n" + "\n".join(f"- {t}" for t in topics)
