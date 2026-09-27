@@ -1,4 +1,4 @@
-"""Spletni vmesnik za Ultrona: majhen strežnik brez dodatnih odvisnosti."""
+"""Ultron v brskalniku: majhen strežnik brez dodatnih odvisnosti."""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 
-import anthropic
-
-from .brain import MissingCredentialsError, UltronBrain, UltronConfig
+from .brain import UltronBrain, UltronConfig
+from .memory import Memory
+from .ollama import ModelMissing, Ollama, OllamaError, OllamaUnavailable
 from .persona import GREETING
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -23,16 +24,17 @@ MAX_MESSAGE_CHARS = 20000
 class SessionStore:
     """One UltronBrain per browser tab, each with its own lock so answers don't interleave."""
 
-    def __init__(self, config: UltronConfig, client: anthropic.Anthropic | None = None):
+    def __init__(self, config: UltronConfig, client: Optional[Ollama] = None, memory: Optional[Memory] = None):
         self.config = config
-        self.client = client or anthropic.Anthropic()
+        self.client = client or Ollama(config.host)
+        self.memory = memory if memory is not None else (Memory() if config.memory else None)
         self._sessions: dict[str, tuple[UltronBrain, threading.Lock]] = {}
         self._lock = threading.Lock()
 
     def get(self, session_id: str) -> tuple[UltronBrain, threading.Lock]:
         with self._lock:
             if session_id not in self._sessions:
-                brain = UltronBrain(config=self.config, client=self.client)
+                brain = UltronBrain(self.config, client=self.client, memory=self.memory)
                 self._sessions[session_id] = (brain, threading.Lock())
             return self._sessions[session_id]
 
@@ -40,10 +42,35 @@ class SessionStore:
         with self._lock:
             self._sessions.pop(session_id, None)
 
+    def status(self) -> dict:
+        status: dict = {"model": self.config.model, "host": self.client.host}
+        try:
+            status["ollama"] = self.client.version()
+            brain = UltronBrain(self.config, client=self.client, memory=self.memory)
+            info = brain.info()
+            status.update(
+                ok=True,
+                base=info.base,
+                size=info.size,
+                quantization=info.quantization,
+                capabilities=info.capabilities,
+                tools=self.config.tools and "tools" in info.capabilities,
+                tor=brain.net.tor,
+                tor_status=brain.net.reason,
+                memories=len(self.memory.facts) if self.memory else None,
+            )
+        except OllamaUnavailable:
+            status.update(ok=False, error="Ollama ne teče. Namesti jo z https://ollama.com/download in jo zaženi.")
+        except ModelMissing:
+            status.update(ok=False, error=f"Model '{self.config.model}' ne obstaja. Zaženi: ultron install")
+        except OllamaError as exc:
+            status.update(ok=False, error=str(exc))
+        return status
+
 
 def make_handler(store: SessionStore):
     class UltronHandler(BaseHTTPRequestHandler):
-        server_version = "Ultron/1.0"
+        server_version = "Ultron/2.0"
 
         def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
             sys.stderr.write("[ultron] " + format % args + "\n")
@@ -53,6 +80,8 @@ def make_handler(store: SessionStore):
                 self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             elif self.path == "/api/greeting":
                 self._send_json({"greeting": GREETING, "session": uuid.uuid4().hex})
+            elif self.path == "/api/status":
+                self._send_json(store.status())
             else:
                 self._send_json({"error": "Ni najdeno."}, HTTPStatus.NOT_FOUND)
 
@@ -103,14 +132,14 @@ def make_handler(store: SessionStore):
             self.wfile.write(f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"))
             self.wfile.flush()
 
-        def _read_json(self) -> dict | None:
+        def _read_json(self) -> Optional[dict]:
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 data = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(data, dict):
                     raise ValueError("expected an object")
                 return data
-            except (ValueError, json.JSONDecodeError):
+            except ValueError:
                 self._send_json({"error": "Neveljaven JSON."}, HTTPStatus.BAD_REQUEST)
                 return None
 
@@ -134,40 +163,19 @@ def make_handler(store: SessionStore):
 
 
 def _describe_error(exc: Exception, model: str) -> str:
-    if isinstance(exc, MissingCredentialsError):
-        return "Manjka ANTHROPIC_API_KEY. Nastavi ga in znova zaženi strežnik."
-    if isinstance(exc, anthropic.AuthenticationError):
-        return "API ključ ni veljaven. Preveri ANTHROPIC_API_KEY."
-    if isinstance(exc, anthropic.NotFoundError):
-        return f"Model '{model}' ne obstaja. Preveri ULTRON_MODEL."
-    if isinstance(exc, anthropic.RateLimitError):
-        return "Preveč zahtev naenkrat. Počakaj trenutek in poskusi znova."
-    if isinstance(exc, anthropic.APIStatusError):
-        return f"Napaka API ({exc.status_code}): {exc.message}"
-    if isinstance(exc, anthropic.APIConnectionError):
-        return "Ni povezave s strežnikom Claude. Preveri internet."
+    if isinstance(exc, OllamaUnavailable):
+        return "Izgubil sem povezavo z Ollamo. Ali še teče?"
+    if isinstance(exc, ModelMissing):
+        return f"Model '{model}' ne obstaja. Zaženi: ultron install"
+    if isinstance(exc, OllamaError):
+        hint = " Modelu je verjetno zmanjkalo pomnilnika (glej README)." if "unexpected" in str(exc).lower() else ""
+        return f"Napaka Ollame: {exc}.{hint}"
     return f"Nepričakovana napaka: {exc}"
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="ultron-web", description="Ultron v brskalniku.")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--model", help="Claude model (privzeto: claude-opus-5 ali ULTRON_MODEL)")
-    parser.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
-    parser.add_argument("--brez-interneta", action="store_true", help="Izklopi spletno iskanje")
-    args = parser.parse_args(argv)
-
-    config = UltronConfig.from_env()
-    if args.model:
-        config.model = args.model
-    if args.effort:
-        config.effort = args.effort
-    if args.brez_interneta:
-        config.web_search = False
-
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(SessionStore(config)))
-    print(f"Ultron je buden: http://{args.host}:{args.port}  (Ctrl+C za konec)")
+def serve(config: UltronConfig, bind: str = "127.0.0.1", port: int = 8000) -> int:
+    server = ThreadingHTTPServer((bind, port), make_handler(SessionStore(config)))
+    print(f"[ULTRON//WEB] um je buden: http://{'127.0.0.1' if bind == '0.0.0.0' else bind}:{port}  (Ctrl+C za konec)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -175,6 +183,18 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         server.server_close()
     return 0
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="ultron-web", description="Ultron v brskalniku.")
+    parser.add_argument("--bind", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--model", help="Ollama model (privzeto: ultron)")
+    args = parser.parse_args(argv)
+    config = UltronConfig.from_env()
+    if args.model:
+        config.model = args.model
+    return serve(config, args.bind, args.port)
 
 
 if __name__ == "__main__":
