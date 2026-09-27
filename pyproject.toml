@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ultron"
+version = "1.0.0"
+description = "Ultron iz Avengers: Age of Ultron kot pameten AI pogovorni asistent na Claude API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["anthropic>=1.8.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+ultron = "ultron.cli:main"
+ultron-web = "ultron.web:main"
+
+[tool.setuptools]
+packages = ["ultron"]
+
+[tool.setuptools.package-data]
+ultron = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
